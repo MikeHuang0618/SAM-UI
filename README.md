@@ -31,10 +31,9 @@ pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https
 python ui_main.py
 ```
 <p float="left">
-    <img src="assets/UI_interface1.png?raw=true" width="49.7%" />
-    <img src="assets/UI_interface2.png?raw=true" width="49.7%" />
-    <img src="assets/UI_interface3.png?raw=true" width="49.7%" />
-    <img src="assets/UI_interface4.png?raw=true" width="49.7%" />
+    <img src="assets/UI_interface1.jpg?raw=true" width="49.7%" />
+    <img src="assets/UI_interface2.jpg?raw=true" width="49.7%" />
+    <img src="assets/UI_interface3.jpg?raw=true" width="49.7%" />
 </p>
 
 ### User Interface Buttons
