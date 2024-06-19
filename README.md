@@ -49,5 +49,10 @@ In this project, QPushButton widgets are utilized for various functionalities in
 
 - **Clear Points Button**: The `Clear Points` button allows users to reset or clear any marked points or annotations on the interface.
 
+## TODO
+
+&#9744; Save the coordinates in YOLO-seg format.  
+&#9744; Added the coco and Pascal VOC format.
+
 ## License
 The model is licensed under the [Apache 2.0 license](LICENSE).
