@@ -1,11 +1,14 @@
 import sys
+import requests
 import os
 import logging
 from types import TracebackType
 from typing import Optional
 import numpy as np
 import cv2
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QListWidget, QListWidgetItem, QGridLayout, QDialog, QLineEdit
+from PyQt5.QtWidgets import (QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
+                             QFileDialog, QListWidget, QListWidgetItem, QGridLayout, QDialog,
+                             QLineEdit, QMessageBox, QProgressDialog)
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QBrush, QFont
 from PyQt5.QtCore import Qt
 from segment_anything import SamPredictor, sam_model_registry
@@ -225,6 +228,51 @@ class SAMApp(QWidget):
         sys.excepthook = self.handle_exception
         
         self.initUI()
+
+        self.sam_checkpoint: Optional[str] = "sam_vit_h_4b8939.pth"
+        self.model_type: str = "vit_h"
+        self.device: str = "cuda"
+        self.model_url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+        self.check_and_download_model()
+    
+    def check_and_download_model(self):
+        """
+        Check if the model file exists and download if not.
+        """
+        if not os.path.exists(self.sam_checkpoint):
+            reply = QMessageBox.question(self, 'Model Download', 'Model file not found. Do you want to download it?',
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.logger.info("Model file not found. Downloading...")
+                try:
+                    response = requests.get(self.model_url, stream=True)
+                    response.raise_for_status()
+
+                    total_size = int(response.headers.get('content-length', 0))
+                    progress_dialog = QProgressDialog("Downloading model...", "Cancel", 0, total_size // 1024, self)
+                    progress_dialog.setWindowModality(Qt.WindowModal)
+                    progress_dialog.setMinimumDuration(0)
+                    progress_dialog.show()
+
+                    downloaded_size = 0
+                    with open(self.sam_checkpoint, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if progress_dialog.wasCanceled():
+                                self.logger.info("Model download canceled by user.")
+                                os.remove(self.sam_checkpoint)
+                                return
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            progress_dialog.setValue(downloaded_size // 1024)
+                    
+                    self.logger.info("Model downloaded successfully.")
+                except Exception as e:
+                    self.logger.error(f"Failed to download the model: {e}")
+                    QMessageBox.critical(self, 'Download Failed', f'Failed to download the model: {e}')
+                    raise
+            else:
+                self.logger.info("Model download canceled by user.")
+                sys.exit()
     
     def handle_exception(self, exc_type: type[BaseException], exc_value: BaseException, exc_traceback: Optional[TracebackType]):
         """
@@ -376,12 +424,8 @@ class SAMApp(QWidget):
         Initialize the SAM predictor model.
         """
         try:
-            sam_checkpoint: Optional[str] = "sam_vit_h_4b8939.pth"
-            model_type: str = "vit_h"
-            device: str = "cuda"
-
-            self.sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-            self.sam.to(device=device)
+            self.sam = sam_model_registry[self.model_type](checkpoint=self.sam_checkpoint)
+            self.sam.to(device=self.device)
             self.logger.info("Model initialized successfully.")
         except Exception as e:
             self.logger.error(f"Failed to initialize model: {e}")
