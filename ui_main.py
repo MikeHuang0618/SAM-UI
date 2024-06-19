@@ -2,8 +2,9 @@ import sys
 import requests
 import os
 import logging
+import hashlib
 from types import TracebackType
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 import cv2
 from PyQt5.QtWidgets import (QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
@@ -13,14 +14,46 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QBrush, QFont
 from PyQt5.QtCore import Qt
 from segment_anything import SamPredictor, sam_model_registry
 
+def apply_mask_to_image(image: np.ndarray, mask: np.ndarray, label_key: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply the mask to the image with the specified color.
+    
+    :param image: The original image.
+    :param mask: The mask to be applied.
+    :param label_key: The label key to determine the mask color.
+    :return: The image with the mask applied.
+    """
+    color = get_color_from_label_key(label_key)
+    masked_image: np.ndarray = image.copy()
+    label_image: np.ndarray = np.zeros_like(image)
+    for c in range(3):
+        masked_image[:, :, c] = np.where(mask, masked_image[:, :, c] * 0.3 + color[c] * 0.7, masked_image[:, :, c])
+        label_image[:, :, c] = np.where(mask, color[c], label_image[:, :, c])
+    return masked_image, label_image
+
+def get_color_from_label_key(label_key: int) -> list[int]:
+    """
+    Generate a color based on the label key.
+
+    :param label_key: The label key.
+    :return: A list of RGB values.
+    """
+    hash_object = hashlib.md5(str(label_key).encode())
+    hex_dig = hash_object.hexdigest()
+    r = int(hex_dig[0:2], 16)
+    g = int(hex_dig[2:4], 16)
+    b = int(hex_dig[4:6], 16)
+    return [r, g, b]
+
 class MaskSelectionDialog(QDialog):
-    def __init__(self, image: np.ndarray, masks: np.ndarray, scores: list[float]):
+    def __init__(self, image: np.ndarray, masks: np.ndarray, scores: list[float], label_key: int):
         """
         Initialize the MaskSelectionDialog.
         
         :param image: The original image.
         :param masks: List of mask arrays.
         :param scores: List of scores corresponding to each mask.
+        :param label_key: The label key to determine the mask color.
         """
         super().__init__()
         self.setWindowTitle('Select Mask')
@@ -28,6 +61,7 @@ class MaskSelectionDialog(QDialog):
         self.image: np.ndarray = image
         self.masks: np.ndarray = masks
         self.scores: list[float] = scores
+        self.label_key: int = label_key
         self.current_index: int = 0
         
         self.initUI()
@@ -85,7 +119,7 @@ class MaskSelectionDialog(QDialog):
         
         :param index: Index of the mask to be displayed.
         """
-        mask_image: np.ndarray = self.apply_mask_to_image(self.image, self.masks[index])
+        mask_image, _ = apply_mask_to_image(self.image, self.masks[index], self.label_key)
         mask_image = self.resize_image(mask_image)
         height, width, _ = mask_image.shape
         bytes_per_line: int = 3 * width
@@ -123,20 +157,6 @@ class MaskSelectionDialog(QDialog):
         if self.current_index < len(self.masks) - 1:
             self.current_index += 1
             self.show_mask(self.current_index)
-    
-    def apply_mask_to_image(self, image: np.ndarray, mask: np.ndarray, color: list[int] = [30, 144, 255]) -> np.ndarray:
-        """
-        Apply the mask to the image with the specified color.
-        
-        :param image: The original image.
-        :param mask: The mask to be applied.
-        :param color: The color to apply to the mask area.
-        :return: The image with the mask applied.
-        """
-        masked_image: np.ndarray = image.copy()
-        for c in range(3):
-            masked_image[:, :, c] = np.where(mask, masked_image[:, :, c] * 0.5 + color[c] * 0.5, masked_image[:, :, c])
-        return masked_image
     
     def get_selected_mask_index(self) -> int:
         """
@@ -213,6 +233,15 @@ class SAMApp(QWidget):
         self.input_labels: list[int] = []
         self.label_name: Optional[str] = None
 
+        self.sam_checkpoint: Optional[str] = "sam_vit_h_4b8939.pth"
+        self.model_type: str = "vit_h"
+        self.device: str = "cuda"
+        self.model_url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+
+        self.labels_dict: dict[int, str] = {}
+        self.labels_path: str = 'labels.txt'
+        self.label_counter: int = 0
+
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
 
@@ -228,11 +257,6 @@ class SAMApp(QWidget):
         sys.excepthook = self.handle_exception
         
         self.initUI()
-
-        self.sam_checkpoint: Optional[str] = "sam_vit_h_4b8939.pth"
-        self.model_type: str = "vit_h"
-        self.device: str = "cuda"
-        self.model_url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
         self.check_and_download_model()
     
     def check_and_download_model(self):
@@ -290,6 +314,55 @@ class SAMApp(QWidget):
         self.logger.info("Close app " + "=" * 40)
         event.accept()
     
+    def add_label(self, label_name: str, yolo: bool = False) -> int:
+        """
+        Added label and return key.
+        """
+        for key, value in self.labels_dict.items():
+            if value == label_name:
+                return key
+
+        new_key = self.label_counter
+        self.labels_dict[new_key] = label_name
+        self.label_counter += 1
+
+        # if yolo:
+        #     self.save_labels_dict()
+        self.save_labels_dict()
+
+        return new_key
+    
+    def save_labels_dict(self):
+        """
+        Save label dict to file.
+        """
+        with open(os.path.join(self.folder_path, self.labels_path), 'w') as file:
+            for key, value in self.labels_dict.items():
+                file.write(f"{key}: {value}\n")
+    
+    def load_labels_dict(self):
+        """
+        From file loading label dict.
+        """
+        if os.path.exists(os.path.join(self.folder_path, self.labels_path)):
+            with open(os.path.join(self.folder_path, self.labels_path), 'r') as file:
+                for line in file:
+                    key, value = line.strip().split(': ')
+                    self.labels_dict[int(key)] = value
+                    self.label_counter = max(self.label_counter, int(key) + 1)
+        else:
+            try:
+                open(os.path.join(self.folder_path, self.labels_path), 'a').close()
+                print(f"File '{os.path.join(self.folder_path, self.labels_path)}' created successfully.")
+            except Exception as e:
+                print(f"Failed to create file '{os.path.join(self.folder_path, self.labels_path)}': {e}")
+    
+    def update_label_name(self, text: str):
+        """
+        Update label.
+        """
+        self.label_name: str = text.strip()
+    
     def initUI(self):
         """
         Initialize the user interface.
@@ -297,21 +370,28 @@ class SAMApp(QWidget):
         self.main_layout: QGridLayout = QGridLayout()
 
         self.image_label: ClickableLabel = ClickableLabel(self)
-        self.image_label.setFixedSize(800, 600)
+        self.image_label.setFixedSize(600, 600)
         self.image_label.setAlignment(Qt.AlignCenter)
         
-        placeholder: QImage = QImage(800, 600, QImage.Format_RGB888)
+        placeholder: QImage = QImage(600, 600, QImage.Format_RGB888)
         placeholder.fill(Qt.gray)
         self.image_label.setPixmap(QPixmap.fromImage(placeholder))
         
         self.predicted_label: QLabel = QLabel()
-        self.predicted_label.setFixedSize(800, 600)
+        self.predicted_label.setFixedSize(600, 600)
         self.predicted_label.setAlignment(Qt.AlignCenter)
         
         self.predicted_label.setPixmap(QPixmap.fromImage(placeholder))
+
+        self.predicted_label_mask: QLabel = QLabel()
+        self.predicted_label_mask.setFixedSize(600, 600)
+        self.predicted_label_mask.setAlignment(Qt.AlignCenter)
+        
+        self.predicted_label_mask.setPixmap(QPixmap.fromImage(placeholder))
         
         self.main_layout.addWidget(self.image_label, 0, 0)
         self.main_layout.addWidget(self.predicted_label, 0, 1)
+        self.main_layout.addWidget(self.predicted_label_mask, 0, 2)
         
         self.side_layout: QVBoxLayout = QVBoxLayout()
         
@@ -322,15 +402,15 @@ class SAMApp(QWidget):
         self.load_button: QPushButton = QPushButton('Load Folder')
         self.load_button.clicked.connect(self.load_folder)
         self.side_layout.addWidget(self.load_button)
-        
-        self.predict_button: QPushButton = QPushButton('Predict Mask')
-        self.predict_button.clicked.connect(self.predict_mask)
-        self.side_layout.addWidget(self.predict_button)
 
         self.label_input: QLineEdit = QLineEdit()
         self.label_input.setPlaceholderText('Enter Label Name')
         self.label_input.textChanged.connect(self.update_label_name)
         self.side_layout.addWidget(self.label_input)
+        
+        self.predict_button: QPushButton = QPushButton('Predict Mask')
+        self.predict_button.clicked.connect(self.predict_mask)
+        self.side_layout.addWidget(self.predict_button)
 
         self.save_mask_button: QPushButton = QPushButton('Save Mask')
         self.save_mask_button.clicked.connect(self.save_mask)
@@ -351,9 +431,6 @@ class SAMApp(QWidget):
         self.logger.info("UI Initialized.")           
         self.initialize_predictor()
     
-    def update_label_name(self, text: str):
-        self.label_name: str = text.strip()
-    
     def load_folder(self):
         """
         Load images from a folder.
@@ -369,6 +446,8 @@ class SAMApp(QWidget):
                 self.image_list_widget.addItem(item)
             
             self.logger.info(f"Loaded folder: {self.folder_path} with {len(self.image_list)} images.")
+        
+        self.load_labels_dict()
     
     def display_image(self):
         """
@@ -464,7 +543,16 @@ class SAMApp(QWidget):
                 point_labels=input_labels_np,
                 multimask_output=True,
             )
-            self.show_mask_selection_dialog(masks, scores)
+            
+            if self.label_name:
+                label_key: int = self.add_label(self.label_name)
+            else:
+                reply = QMessageBox.question(self, 'Enter label name', 'You did not enter a label name',
+                                         QMessageBox.Yes)
+                if reply == QMessageBox.Yes:
+                    return
+            
+            self.show_mask_selection_dialog(masks, scores, label_key)
 
             self.logger.info(f"Predicted mask for image: {self.image_path}")
     
@@ -476,48 +564,40 @@ class SAMApp(QWidget):
         self.input_labels = []
         self.image_label.clicked_position = []
         self.image_label.update()
-        self.logger.info(f"Clear points: {self.image_path}")
+        self.logger.info(f"Clear points")
     
-    def show_mask_selection_dialog(self, masks: np.ndarray, scores: np.ndarray):
+    def show_mask_selection_dialog(self, masks: np.ndarray, scores: np.ndarray, label_key: int):
         """
         Show the dialog to select a mask.
         
         :param masks: The predicted masks.
         :param scores: The scores of the masks.
+        :param label_key: The label key to determine the mask color.
         """
-        dialog = MaskSelectionDialog(self.image, masks, scores)
+        dialog = MaskSelectionDialog(self.image, masks, scores, label_key)
         if dialog.exec_() == QDialog.Accepted:
             selected_mask_index: int = dialog.get_selected_mask_index()
-            self.show_selected_mask(masks[selected_mask_index])
+            self.show_selected_mask(masks[selected_mask_index], label_key)
     
-    def show_selected_mask(self, mask: np.ndarray):
+    def show_selected_mask(self, mask: np.ndarray, label_key: int):
         """
         Show the selected mask.
         
         :param mask: The selected mask.
+        :param label_key: The label key to determine the mask color.
         """
-        self.mask_image: np.ndarray = self.apply_mask_to_image(self.image, mask)
+        self.mask_image, self.label_image = apply_mask_to_image(self.image, mask, label_key)
 
         mask_resize_image: np.ndarray = self.resize_image(self.mask_image)
+        label_resize_image: np.ndarray = self.resize_image(self.label_image)
 
-        height, width, channel = mask_resize_image.shape
+        height, width, _ = mask_resize_image.shape
         bytes_per_line: int = 3 * width
+        
         q_image: QImage = QImage(mask_resize_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
         self.predicted_label.setPixmap(QPixmap.fromImage(q_image))
-    
-    def apply_mask_to_image(self, image: np.ndarray, mask: np.ndarray, color: list[int] = [30, 144, 255]) -> np.ndarray:
-        """
-        Apply the mask to the image.
-        
-        :param image: The original image.
-        :param mask: The mask to apply.
-        :param color: The color to use for the mask.
-        :return: The image with the mask applied.
-        """
-        masked_image: np.ndarray = image.copy()
-        for c in range(3):
-            masked_image[:, :, c] = np.where(mask, masked_image[:, :, c] * 0.5 + color[c] * 0.5, masked_image[:, :, c])
-        return masked_image
+        q_image: QImage = QImage(label_resize_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.predicted_label_mask.setPixmap(QPixmap.fromImage(q_image))
 
     def save_mask(self):
         """
@@ -531,7 +611,7 @@ class SAMApp(QWidget):
         image_path = image_path.split('.')[0]
         image_name_without_extension: str = os.path.splitext(image_path)[0]
         image_name_without_extension = image_name_without_extension.rsplit('.', 1)[0]
-        status: bool = cv2.imwrite(f"{mask_folder_path}/{image_name_without_extension}_mask.png", cv2.cvtColor(self.mask_image, cv2.COLOR_RGB2BGR))
+        status: bool = cv2.imwrite(f"{mask_folder_path}/{image_name_without_extension}_mask.png", cv2.cvtColor(self.label_image, cv2.COLOR_RGB2BGR))
         if status:
             self.logger.info(f"Mask saved: {mask_folder_path}/{image_name_without_extension}_mask.png")
         else:
