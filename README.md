@@ -28,9 +28,14 @@ Semantic segmentation is a crucial task in computer vision, aiming to assign sem
 ### Environment Setup
 
 ```bash
-pip install -r requirements.txt 
-pip install torch==2.3.1 torchvision==0.18.0 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu121
 ```
+Need install segment-anything model 2.
+```bash
+git clone https://github.com/facebookresearch/segment-anything-2.git
+cd segment-anything-2 & pip install -e .
+```
+
 ### Running the UI
 
 ```bash
