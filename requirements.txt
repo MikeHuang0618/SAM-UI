@@ -1,8 +1,8 @@
-numpy==1.26.3
+numpy==1.26.4
 requests
 opencv-python
 pycocotools
 matplotlib
-onnxruntime
-onnx
-git+https://github.com/facebookresearch/segment-anything.git
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
