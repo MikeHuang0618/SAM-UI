@@ -1,2 +1,11 @@
-.onnx
-.pth
+# Ignore directories and their contents
+images/
+masks/
+
+# Ignore specific file
+app.log
+
+# Ignore files with specific extensions
+*.onnx
+*.pth
+*.pt

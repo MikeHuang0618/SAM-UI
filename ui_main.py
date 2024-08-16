@@ -13,6 +13,10 @@ from PyQt5.QtWidgets import (QApplication, QLabel, QPushButton, QVBoxLayout, QHB
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QBrush, QFont
 from PyQt5.QtCore import Qt
 from segment_anything import SamPredictor, sam_model_registry
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+BASE_PATH = os.getcwd()
 
 def apply_mask_to_image(image: np.ndarray, mask: np.ndarray, label_key: int) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -110,7 +114,8 @@ class MaskSelectionDialog(QDialog):
     
     def update_info(self):
         """Update the score and mask count information labels."""
-        self.score_label.setText(f"Score: {self.scores[self.current_index]:.3f}")
+        sorted_ind = np.argsort(self.scores)[::-1]
+        self.score_label.setText(f"Score: {self.scores[sorted_ind][self.current_index]:.3f}")
         self.num_masks_label.setText(f"Masks: {self.current_index + 1} / {len(self.masks)}")
     
     def show_mask(self, index: int):
@@ -224,7 +229,7 @@ class SAMApp(QWidget):
         Initialize the SAMApp.
         """
         super().__init__()
-        self.setWindowTitle('SAM Model UI')
+        self.setWindowTitle('SAM2 Model UI')
         
         self.image: Optional[np.ndarray] = None
         self.image_list: list[str] = []
@@ -233,10 +238,10 @@ class SAMApp(QWidget):
         self.input_labels: list[int] = []
         self.label_name: Optional[str] = None
 
-        self.sam_checkpoint: Optional[str] = "sam_vit_h_4b8939.pth"
-        self.model_type: str = "vit_h"
+        self.sam2_checkpoint: Optional[str] = os.path.join(BASE_PATH, "checkpoints/sam2_hiera_base_plus.pt")
+        self.model_cfg = "sam2_hiera_b+.yaml"
         self.device: str = "cuda"
-        self.model_url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+        self.model_url = "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt"
 
         self.labels_dict: dict[int, str] = {}
         self.labels_path: str = 'labels.txt'
@@ -258,12 +263,17 @@ class SAMApp(QWidget):
         
         self.initUI()
         self.check_and_download_model()
+        self.initialize_predictor()
     
     def check_and_download_model(self):
         """
         Check if the model file exists and download if not.
         """
-        if not os.path.exists(self.sam_checkpoint):
+        checkpoints_dir = os.path.dirname(self.sam2_checkpoint)
+        if not os.path.exists(checkpoints_dir):
+            os.makedirs(checkpoints_dir)
+
+        if not os.path.exists(self.sam2_checkpoint):
             reply = QMessageBox.question(self, 'Model Download', 'Model file not found. Do you want to download it?',
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
@@ -279,11 +289,11 @@ class SAMApp(QWidget):
                     progress_dialog.show()
 
                     downloaded_size = 0
-                    with open(self.sam_checkpoint, 'wb') as f:
+                    with open(self.sam2_checkpoint, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             if progress_dialog.wasCanceled():
                                 self.logger.info("Model download canceled by user.")
-                                os.remove(self.sam_checkpoint)
+                                os.remove(self.sam2_checkpoint)
                                 return
                             f.write(chunk)
                             downloaded_size += len(chunk)
@@ -426,10 +436,9 @@ class SAMApp(QWidget):
         
         self.main_layout.addLayout(self.side_layout, 1, 0, 1, 2)
         
-        self.setLayout(self.main_layout)     
+        self.setLayout(self.main_layout)
 
-        self.logger.info("UI Initialized.")           
-        self.initialize_predictor()
+        self.logger.info("UI Initialized.")
     
     def load_folder(self):
         """
@@ -467,7 +476,7 @@ class SAMApp(QWidget):
                 q_image: QImage = QImage(resized_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
                 self.image_label.setPixmap(QPixmap.fromImage(q_image))
                         
-                self.predictor: SamPredictor = SamPredictor(self.sam)
+                self.predictor: SAM2ImagePredictor = SAM2ImagePredictor(self.sam2)
                 self.predictor.set_image(self.image)
 
                 self.input_points = []
@@ -503,8 +512,8 @@ class SAMApp(QWidget):
         Initialize the SAM predictor model.
         """
         try:
-            self.sam = sam_model_registry[self.model_type](checkpoint=self.sam_checkpoint)
-            self.sam.to(device=self.device)
+            self.sam2 = build_sam2(self.model_cfg, self.sam2_checkpoint, device=self.device)
+            self.sam2.to(device=self.device)
             self.logger.info("Model initialized successfully.")
         except Exception as e:
             self.logger.error(f"Failed to initialize model: {e}")
