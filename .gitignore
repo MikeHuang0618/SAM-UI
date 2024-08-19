@@ -1,6 +1,7 @@
 # Ignore directories and their contents
 images/
 masks/
+node_modules/
 
 # Ignore specific file
 app.log
